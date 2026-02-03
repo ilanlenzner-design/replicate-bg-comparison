@@ -426,6 +426,7 @@ function App() {
                         showScoring={showScoring}
                         onToggleScoring={() => setShowScoring(!showScoring)}
                         isSaved={isSaved}
+                        replicateApiKey={apiKey}
                     />
                 )}
             </main>

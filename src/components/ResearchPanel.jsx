@@ -1,33 +1,32 @@
 import React, { useState } from 'react';
 import { TEST_CATEGORIES } from '../services/testDatabase';
 
-export function ResearchPanel({ onSaveTest, scores, results, imageUrl, showScoring, onToggleScoring, isSaved }) {
+export function ResearchPanel({ onSaveTest, scores, results, imageUrl, showScoring, onToggleScoring, isSaved, replicateApiKey }) {
     const [category, setCategory] = useState('');
     const [testName, setTestName] = useState('');
     const [notes, setNotes] = useState('');
     const [imageAnalysis, setImageAnalysis] = useState('');
     const [isAnalyzing, setIsAnalyzing] = useState(false);
-    const [hasClaudeKey, setHasClaudeKey] = useState(false);
 
     const hasResults = Object.keys(results).some(id => results[id]?.output);
     const hasScores = Object.keys(scores).length > 0;
     const showUnsavedWarning = !isSaved && hasResults;
 
-    // Check if Claude API key is configured
-    React.useEffect(() => {
-        fetch('/api/config')
-            .then(res => res.json())
-            .then(config => setHasClaudeKey(config.hasClaudeKey))
-            .catch(() => setHasClaudeKey(false));
-    }, []);
-
     const analyzeImage = async () => {
+        if (!replicateApiKey) {
+            alert('Replicate API key not available. Please enter your API key in settings.');
+            return;
+        }
+
         setIsAnalyzing(true);
         try {
             const response = await fetch('/api/analyze-image', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ imageUrl })
+                body: JSON.stringify({
+                    imageUrl,
+                    replicateApiKey
+                })
             });
 
             if (!response.ok) {
@@ -38,7 +37,7 @@ export function ResearchPanel({ onSaveTest, scores, results, imageUrl, showScori
             setImageAnalysis(data.analysis);
         } catch (error) {
             console.error('Image analysis error:', error);
-            alert('Failed to analyze image. Make sure ANTHROPIC_API_KEY is set in Railway.');
+            alert('Failed to analyze image. Please try again.');
         } finally {
             setIsAnalyzing(false);
         }
@@ -133,7 +132,7 @@ export function ResearchPanel({ onSaveTest, scores, results, imageUrl, showScori
                 </div>
 
                 {/* AI Image Analysis */}
-                {hasClaudeKey && imageUrl && (
+                {imageUrl && replicateApiKey && (
                     <div className="analysis-section">
                         <div className="analysis-header">
                             <label>🤖 AI Image Analysis</label>

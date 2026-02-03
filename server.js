@@ -16,62 +16,23 @@ app.use(express.static(path.join(__dirname, 'dist')));
 app.get('/api/config', (req, res) => {
     res.json({
         apiKey: process.env.REPLICATE_API_KEY || null,
-        hasServerKey: !!process.env.REPLICATE_API_KEY,
-        hasClaudeKey: !!process.env.ANTHROPIC_API_KEY
+        hasServerKey: !!process.env.REPLICATE_API_KEY
     });
 });
 
-// Image analysis endpoint - uses Claude Vision to analyze images
+// Image analysis endpoint - uses Replicate vision model
 app.post('/api/analyze-image', async (req, res) => {
     try {
-        const { imageUrl } = req.body;
-        const anthropicKey = process.env.ANTHROPIC_API_KEY;
+        const { imageUrl, replicateApiKey } = req.body;
+        const apiKey = replicateApiKey || process.env.REPLICATE_API_KEY;
 
-        if (!anthropicKey) {
+        if (!apiKey) {
             return res.status(400).json({
-                error: 'Image analysis not configured. Set ANTHROPIC_API_KEY environment variable.'
+                error: 'Replicate API key not provided'
             });
         }
 
-        // Prepare the image for Claude API
-        let imageData;
-        if (imageUrl.startsWith('data:')) {
-            // Extract base64 from data URL
-            const matches = imageUrl.match(/^data:([^;]+);base64,(.+)$/);
-            if (matches) {
-                imageData = {
-                    type: 'base64',
-                    media_type: matches[1],
-                    data: matches[2]
-                };
-            }
-        }
-
-        if (!imageData) {
-            return res.status(400).json({ error: 'Invalid image format' });
-        }
-
-        // Call Claude API for image analysis
-        const response = await fetch('https://api.anthropic.com/v1/messages', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'x-api-key': anthropicKey,
-                'anthropic-version': '2023-06-01'
-            },
-            body: JSON.stringify({
-                model: 'claude-3-5-sonnet-20241022',
-                max_tokens: 500,
-                messages: [{
-                    role: 'user',
-                    content: [
-                        {
-                            type: 'image',
-                            source: imageData
-                        },
-                        {
-                            type: 'text',
-                            text: `Analyze this image for background removal purposes. Provide:
+        const prompt = `Analyze this image for background removal purposes. Provide:
 
 **Subject**: What's the main subject?
 **Style**: Photo/cartoon/illustration/3D?
@@ -80,21 +41,57 @@ app.post('/api/analyze-image', async (req, res) => {
 **Challenges**: What makes BG removal difficult?
 **Recommended Category**: Portrait/E-commerce/Cartoon/Animals/Complex/Fine-Details/VFX/Transparent/Challenging
 
-Keep under 150 words, be concise and specific.`
-                        }
-                    ]
-                }]
+Keep under 150 words, be concise and specific.`;
+
+        // Create prediction with LLaVA vision model
+        const createResponse = await fetch('https://api.replicate.com/v1/predictions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Token ${apiKey}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                version: '2facb4a474a0462c15041b78b1ad70952ea46b5ec6ad29583c0b29dbd4249591', // llava-13b
+                input: {
+                    image: imageUrl,
+                    prompt: prompt,
+                    max_tokens: 500
+                }
             })
         });
 
-        if (!response.ok) {
-            const error = await response.text();
-            console.error('Claude API error:', error);
-            return res.status(response.status).json({ error: 'Failed to analyze image' });
+        if (!createResponse.ok) {
+            const error = await createResponse.text();
+            console.error('Replicate API error:', error);
+            return res.status(createResponse.status).json({ error: 'Failed to create analysis' });
         }
 
-        const result = await response.json();
-        const analysis = result.content[0].text;
+        let prediction = await createResponse.json();
+
+        // Poll for result
+        while (prediction.status !== 'succeeded' && prediction.status !== 'failed') {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+
+            const statusResponse = await fetch(`https://api.replicate.com/v1/predictions/${prediction.id}`, {
+                headers: {
+                    'Authorization': `Token ${apiKey}`,
+                }
+            });
+
+            if (!statusResponse.ok) {
+                throw new Error('Failed to check prediction status');
+            }
+
+            prediction = await statusResponse.json();
+        }
+
+        if (prediction.status === 'failed') {
+            return res.status(500).json({ error: 'Analysis failed' });
+        }
+
+        const analysis = Array.isArray(prediction.output)
+            ? prediction.output.join('')
+            : prediction.output;
 
         res.json({ analysis });
     } catch (error) {
